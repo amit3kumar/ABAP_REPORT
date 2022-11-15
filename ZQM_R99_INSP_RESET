@@ -1,0 +1,509 @@
+*&-------------------------------------------------------------------*
+*& Report ZQM_R99_INSP_RESET
+*---------------------------------------------------------------------
+* Title:          Reset Inspection lot
+* RICEF#:         99
+* Transaction:    Z_INSP_RESET
+*---------------------------------------------------------------------
+* Copyright:      NDBS, Inc.
+* Client:         Flexsys America, L.P.
+*---------------------------------------------------------------------
+* Developer:      Amit Kumar
+* Creation Date:  06/25/2022
+* Description:    Reset Inspection lot
+*---------------------------------------------------------------------
+* Modification History
+*---------------------------------------------------------------------
+* Modified by:    <Developer (full name and user name)>
+* Date:           <Date>
+* Transport:      <Transport Request #>
+* Description:
+* <Description of the change (or the source for the initial
+* creation if a template or SAP program was used as a starting point>
+*---------------------------------------------------------------------
+REPORT zqm_r99_insp_reset.
+*&-------------------------------------------------------------------*
+*& Include
+*&-------------------------------------------------------------------*
+
+INCLUDE zqm_r99_insp_reset_top.
+INCLUDE zqm_r99_insp_reset_f01.
+*&-------------------------------------------------------------------*
+*& Report Event: INITIALIZATION
+*&-------------------------------------------------------------------*
+INITIALIZATION.
+
+  IF go_obj IS NOT BOUND.
+    go_obj = NEW zcl_qm_99_insp_reset( ).
+  ENDIF.
+
+*&-------------------------------------------------------------------*
+*& Report Event: AT SELECTION-SCREEN
+*&-------------------------------------------------------------------*
+AT SELECTION-SCREEN.
+  IF go_obj IS BOUND.
+    CALL METHOD go_obj->validate_selection_screen
+      EXPORTING
+        ir_lot_created = s_lot[]
+        ir_batch       = s_batch[]
+        iv_werks       = p_plant
+        iv_matnr       = p_matnr.
+  ENDIF.
+
+*&-------------------------------------------------------------------*
+*& Report Event: START-OF-SELECTION
+*&-------------------------------------------------------------------*
+
+START-OF-SELECTION.
+  CALL METHOD go_obj->get_inspection_lots
+    EXPORTING
+      ir_lot_created    = s_lot[]
+      ir_batch          = s_batch[]
+      iv_werks          = p_plant
+      iv_matnr          = p_matnr
+      iv_ud_flag        = p_ud
+    IMPORTING
+      et_inspection_lot = gt_inspection_lots.
+
+
+*&-------------------------------------------------------------------*
+*& Report Event: END-OF-SELECTION
+*&-------------------------------------------------------------------*
+END-OF-SELECTION.
+  PERFORM display_alv.
+
+
+*&---------------------------------------------------------------------*
+*& Class (Implementation) lcl_handle_events
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+CLASS lcl_handle_events IMPLEMENTATION.
+  METHOD on_link_click.
+    DATA(ls_insp_lot) = gt_inspection_lots[ row ].
+    IF sy-subrc = 0.
+      SET PARAMETER ID 'QLS' FIELD ls_insp_lot-prueflos.
+      CALL TRANSACTION 'QA03' AND SKIP FIRST SCREEN.
+
+    ENDIF.
+  ENDMETHOD.
+  METHOD on_user_command.
+
+    DATA: lr_selections TYPE REF TO cl_salv_selections,
+          lt_rows       TYPE salv_t_row,
+          ls_rows       TYPE i,
+          message       TYPE string,
+          lt_insp_reset TYPE zqm_t_insp_reset.
+    CLEAR : lt_rows ,ls_rows.
+
+    CASE e_salv_function.
+
+      WHEN '&ERROR'.
+
+        IF gt_error_log IS NOT INITIAL.
+          PERFORM display_error_log.
+        ELSE.
+          MESSAGE TEXT-m01 TYPE 'I'.
+        ENDIF.
+
+      WHEN '&RESET'.
+        lr_selections = go_table->get_selections( ).
+        lt_rows = go_selections->get_selected_rows( ).
+        LOOP AT lt_rows INTO ls_rows.
+          APPEND INITIAL LINE TO lt_insp_reset ASSIGNING FIELD-SYMBOL(<fs_reset_insp>).
+          <fs_reset_insp> = gt_inspection_lots[ ls_rows ].
+          CLEAR ls_rows.
+        ENDLOOP.
+        IF lt_insp_reset IS NOT INITIAL.
+          LOOP AT lt_insp_reset INTO DATA(ls_insp_reset) .
+            PERFORM bdc_insp_reset USING ls_insp_reset.
+            CLEAR ls_insp_reset.
+          ENDLOOP.
+          DELETE gt_error_msg WHERE msgtyp EQ gc_success AND msgnr EQ '116'.
+          IF sy-subrc NE 0.
+             PERFORM Populate_error_log.
+            MESSAGE TEXT-m05 TYPE gc_error.
+          ELSE.
+            IF gt_error_msg IS INITIAL.
+              MESSAGE TEXT-m02 TYPE gc_success.
+            ELSE.
+              PERFORM Populate_error_log.
+              MESSAGE  TEXT-m03 TYPE gc_info.
+            ENDIF.
+          ENDIF.
+        ELSE.
+          MESSAGE TEXT-m04 TYPE gc_info.
+
+        ENDIF.
+        PERFORM refresh_alv.
+      WHEN OTHERS.
+    ENDCASE.
+  ENDMETHOD.
+ENDCLASS.
+
+
+
+*&-------------------------------------------------------------------*
+*& Include          ZQM_R99_INSP_RESET_TOP
+*---------------------------------------------------------------------
+* Title:          Reset Inspection Lot
+* RICEF#:         99
+* Transaction:    Z_INSP_RESET
+*---------------------------------------------------------------------
+* Copyright:      NDBS, Inc.
+* Client:         Flexsys America, L.P.
+*---------------------------------------------------------------------
+* Developer:      Amit Kumar
+* Creation Date:  07/25/2022
+* Description:    Reset Inspection Lot
+*---------------------------------------------------------------------
+* Modification History
+*---------------------------------------------------------------------
+* Modified by:    <Developer (full name and user name)>
+* Date:           <Date>
+* Transport:      <Transport Request #>
+* Description:
+* <Description of the change (or the source for the initial
+* creation if a template or SAP program was used as a starting point>
+*---------------------------------------------------------------------
+*&-------------------------------------------------------------------*
+*& Global Variable Declaration
+*&-------------------------------------------------------------------*
+TYPES: BEGIN OF gs_error_log,
+         msgv1    TYPE bdc_vtext1,
+         msgv2    TYPE bdc_vtext1,
+         msgv3    TYPE bdc_vtext1,
+         fldname TYPE fnam_____4,
+       END OF gs_error_log.
+
+CONSTANTS: gc_success TYPE char1 VALUE 'S',
+           gc_error TYPE char1 VALUE 'E',
+           gc_info TYPE char1 VALUE 'I'.
+
+DATA: gt_layout          TYPE lvc_s_layo,
+      gv_lot_created     TYPE qals-enstehdat,
+      gv_batch           TYPE qals-charg,
+      gt_inspection_lots TYPE zqm_t_insp_reset,
+      gt_bdcdata         TYPE TABLE OF bdcdata,
+      gs_bdcdata         TYPE bdcdata,
+      gt_error_msg       TYPE TABLE OF bdcmsgcoll,
+      gs_error_msg       TYPE bdcmsgcoll,
+      gt_error_log       TYPE TABLE OF gs_error_log.
+
+*&-------------------------------------------------------------------*
+*& Reference Variable Declaration
+*&-------------------------------------------------------------------*
+
+DATA: go_selections TYPE REF TO cl_salv_selections, " Variables for selection mode and column properties
+      go_table      TYPE REF TO cl_salv_table,
+      go_columns    TYPE REF TO cl_salv_columns_table,
+      go_column     TYPE REF TO cl_salv_column_table,
+      go_functions  TYPE REF TO cl_salv_functions,
+      go_events     TYPE REF TO cl_salv_events_table,
+      go_alv_events TYPE REF TO cl_gui_alv_grid,
+      go_obj        TYPE REF TO zcl_QM_99_INSP_RESET.
+
+*----------------------------------------------------------------------*
+*       CLASS lcl_handle_events DEFINITION
+*----------------------------------------------------------------------*
+
+CLASS lcl_handle_events DEFINITION.
+  PUBLIC SECTION.
+    METHODS: on_link_click   FOR EVENT link_click OF
+      cl_salv_events_table
+      IMPORTING row column.
+    METHODS:
+      on_user_command FOR EVENT added_function OF cl_salv_events
+        IMPORTING e_salv_function.
+  PRIVATE SECTION.
+ENDCLASS.                    "lcl_handle_events DEFINITION
+
+
+DATA: go_event_handler TYPE REF TO lcl_handle_events.
+
+
+*&-------------------------------------------------------------------*
+*& Selelction-Screen
+*&-------------------------------------------------------------------*
+SELECTION-SCREEN BEGIN OF BLOCK b1 WITH FRAME TITLE TEXT-001.
+  SELECT-OPTIONS : S_Lot  FOR gv_lot_created  DEFAULT sy-datum TO sy-datum OBLIGATORY.
+  PARAMETERS : P_plant TYPE werks_d  OBLIGATORY,
+               p_matnr TYPE matnr  VISIBLE LENGTH 12 OBLIGATORY.
+  SELECT-OPTIONS:s_batch FOR gv_batch." OBLIGATORY.
+SELECTION-SCREEN END OF BLOCK b1.
+SELECTION-SCREEN BEGIN OF BLOCK b2 WITH FRAME TITLE TEXT-002.
+
+  SELECTION-SCREEN BEGIN OF LINE.
+    PARAMETERS: p_alles RADIOBUTTON GROUP ud.
+    SELECTION-SCREEN COMMENT 3(70) TEXT-p03 FOR FIELD p_alles.
+  SELECTION-SCREEN END OF LINE.
+
+  SELECTION-SCREEN BEGIN OF LINE.
+    PARAMETERS: p_ud RADIOBUTTON GROUP ud.
+    SELECTION-SCREEN COMMENT 3(70) TEXT-p02 FOR FIELD p_ud.
+  SELECTION-SCREEN END OF LINE.
+SELECTION-SCREEN END OF BLOCK b2.
+
+
+*&---------------------------------------------------------------------*
+*& Include          ZQM_R99_INSP_RESET_F01
+*&---------------------------------------------------------------------*
+* Title:          Reset Inspection Lot
+* RICEF#:         99
+* Transaction:    Z_INSP_RESET
+*---------------------------------------------------------------------
+* Copyright:      NDBS, Inc.
+* Client:         Flexsys America, L.P.
+*---------------------------------------------------------------------
+* Developer:      Amit Kumar
+* Creation Date:  07/25/2022
+* Description:    Reset Inspection Lot
+*---------------------------------------------------------------------
+* Modification History
+*---------------------------------------------------------------------
+* Modified by:    Sireesha Bellamkonda
+* Date:           08/20/2022
+* Transport:      FLDK902848
+* Description:    Issue with errorlog display - Task1306
+*---------------------------------------------------------------------
+
+
+FORM display_alv.
+
+  FREE:go_table, go_functions, go_columns,
+           go_column, go_events, go_selections,go_event_handler.
+  TRY.
+
+
+
+
+      CALL METHOD cl_salv_table=>factory
+        IMPORTING
+          r_salv_table = go_table
+        CHANGING
+          t_table      = gt_inspection_lots[].
+
+    CATCH cx_salv_msg. " ALV: General Error Class with Message
+  ENDTRY.
+
+**-- toolbar funtion
+*  go_functions = go_table->get_functions( ).
+*  go_functions->set_all( abap_true ).
+
+
+*-- column
+  go_columns = go_table->get_columns( ).
+  go_columns->set_column_position( columnname = 'PRUEFLOS' position = 1 ).
+  go_columns->set_column_position( columnname = 'MATNR' position = 2 ).
+  go_columns->set_column_position( columnname = 'CHARG' position = 3 ).
+  go_columns->set_column_position( columnname = 'WERK' position = 4 ).
+  go_columns->set_column_position( columnname = 'LOSMENGE' position = 5 ).
+  go_columns->set_column_position( columnname = 'MENGENEINH' position = 6 ).
+  go_columns->set_column_position( columnname = 'OFFEN_LZMK' position = 7 ).
+  go_columns->set_column_position( columnname = 'OFFENNLZMK' position = 8 ).
+  go_columns->set_column_position( columnname = 'ENSTEHDAT' position = 9 ).
+  go_columns->set_column_position( columnname = 'ERSTELDAT' position = 10 ).
+  go_columns->set_optimize( 'X' ).
+  TRY.
+      go_column ?= go_columns->get_column( columnname = 'PRUEFLOS' ).
+    CATCH cx_salv_not_found. " ALV: General Error Class (Checked in Syntax Check)( 'PRUEFLOS' ).
+  ENDTRY.
+  go_column->set_cell_type( if_salv_c_cell_type=>hotspot ).
+
+*-- events
+  go_events = go_table->get_event( ).
+  CREATE OBJECT go_event_handler.
+  SET HANDLER go_event_handler->on_link_click FOR go_events.
+  SET HANDLER go_event_handler->on_user_command FOR go_events.
+  go_table->set_screen_status(
+*  pfstatus = 'ZSTANDARD'
+  pfstatus = 'ZSTANDARD_FULLSCREEN'
+  report = sy-repid
+  set_functions = go_table->c_functions_all ).
+
+* Enable cell selection mode
+  go_selections = go_table->get_selections( ).
+  go_selections->set_selection_mode( if_salv_c_selection_mode=>row_column ).
+  go_table->display( ).
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*& Form bdc_insp_reset
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*& -->  p1        text
+*& <--  p2        text
+*&---------------------------------------------------------------------*
+FORM bdc_insp_reset USING ls_insp_reset TYPE zqm_s_insp_reset.
+*  LOOP AT lt_insp_reset ASSIGNING FIELD-SYMBOL(<fs_insp_reset>).
+  DATA:     lt_error_msg       TYPE TABLE OF bdcmsgcoll.    "FLDK902848
+  PERFORM bdc_dynpro      USING 'SAPMQEVA' '0100'.
+  PERFORM bdc_field       USING 'BDC_CURSOR'
+                                'QALS-PRUEFLOS'.
+  PERFORM bdc_field       USING 'BDC_OKCODE'
+                                '=NB'.
+  PERFORM bdc_field       USING 'QALS-PRUEFLOS'
+                                ls_insp_reset-prueflos."'040000000899'.
+  PERFORM bdc_dynpro      USING 'SAPMQEVA' '0200'.
+  PERFORM bdc_field       USING 'BDC_OKCODE'
+                                '=REND'.
+  PERFORM bdc_field       USING 'BDC_CURSOR'
+                                'RQEVA-MHD_01'.
+*    PERFORM bdc_field       USING 'RQEVA-VCODE'
+*                                  'A1'.
+*    PERFORM bdc_field       USING 'RQEVA-VCODEGRP'
+*                                  'UD04'.
+*    PERFORM bdc_field       USING 'RQEVA-QKENNZAHL'
+*                                  '100'.
+  PERFORM bdc_dynpro      USING 'SAPMQEVA' '0200'.
+  PERFORM bdc_field       USING 'BDC_OKCODE'
+                                '=BU'.
+  PERFORM bdc_field       USING 'BDC_CURSOR'
+                                'RQEVA-MHD_01'.
+*    PERFORM bdc_field       USING 'RQEVA-VCODE'
+*                                  'A1'.
+*    PERFORM bdc_field       USING 'RQEVA-VCODEGRP'
+*                                  'UD04'.
+*    PERFORM bdc_field       USING 'RQEVA-QKENNZAHL'
+*                                  '100'.
+
+  CALL TRANSACTION 'QA12' USING gt_bdcdata MODE 'N' UPDATE 'A'
+        MESSAGES INTO lt_error_msg.
+*  ENDLOOP.
+  CLEAR gt_bdcdata.
+*--Begin of changes TR.No.:FLDK902848
+*  IF gt_error_msg IS NOT INITIAL.
+  IF lt_error_msg IS NOT INITIAL.
+*    LOOP AT gt_error_msg ASSIGNING FIELD-SYMBOL(<fs_error_msg>).
+    LOOP AT lt_error_msg ASSIGNING FIELD-SYMBOL(<fs_error_msg>).
+      CALL FUNCTION 'MESSAGE_TEXT_BUILD'
+        EXPORTING
+          msgid               = <fs_error_msg>-msgid
+          msgnr               = <fs_error_msg>-msgnr
+          msgv1               = <fs_error_msg>-msgv1
+          msgv2               = <fs_error_msg>-msgv2
+          msgv3               = <fs_error_msg>-msgv3
+          msgv4               = <fs_error_msg>-msgv4
+        IMPORTING
+          message_text_output = <fs_error_msg>-fldname.
+      <fs_error_msg>-msgv1 = ls_insp_reset-prueflos.
+      <fs_error_msg>-msgv2 = ls_insp_reset-matnr.
+      <fs_error_msg>-msgv3 = ls_insp_reset-charg.
+      APPEND <fs_error_msg> TO gt_error_msg.
+    ENDLOOP.
+*--End of change Tr.No.:FLDK902848
+  ENDIF.
+ENDFORM.
+FORM refresh_alv.
+  " Refresh screen elements
+  IF go_table IS BOUND.
+*    FREE lo_table.
+    REFRESH: gt_inspection_lots.
+    WAIT UP TO 2 SECONDS.
+    CALL METHOD go_obj->get_inspection_lots
+      EXPORTING
+        ir_lot_created    = s_lot[]
+        ir_batch          = s_batch[]
+        iv_werks          = p_plant
+        iv_matnr          = p_matnr
+        iv_ud_flag        = p_ud
+      IMPORTING
+        et_inspection_lot = gt_inspection_lots.
+    go_table->refresh( refresh_mode = if_salv_c_refresh=>full ).
+    cl_gui_cfw=>flush( ).
+*    PERFORM display_alv.
+  ENDIF.
+
+ENDFORM.
+*----------------------------------------------------------------------*
+*        Start new screen                                              *
+*----------------------------------------------------------------------*
+FORM bdc_dynpro USING program dynpro.
+  CLEAR gs_bdcdata.
+  gs_bdcdata-program  = program.
+  gs_bdcdata-dynpro   = dynpro.
+  gs_bdcdata-dynbegin = 'X'.
+  APPEND gs_bdcdata TO gt_bdcdata.
+ENDFORM.
+
+*----------------------------------------------------------------------*
+*        Insert field                                                  *
+*----------------------------------------------------------------------*
+FORM bdc_field USING fnam fval.
+  IF fval <> space.
+    CLEAR gs_bdcdata.
+    gs_bdcdata-fnam = fnam.
+    gs_bdcdata-fval = fval.
+    APPEND gs_bdcdata TO gt_bdcdata.
+  ENDIF.
+ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form display_error_log
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*& -->  p1        text
+*& <--  p2        text
+*&---------------------------------------------------------------------*
+FORM display_error_log .
+  DATA: lo_column TYPE REF TO cl_salv_column.
+  FREE : go_table,go_columns.
+
+  TRY.
+      CALL METHOD cl_salv_table=>factory
+        IMPORTING
+          r_salv_table = go_table
+        CHANGING
+          t_table      = gt_error_log[].
+
+    CATCH cx_salv_msg. " ALV: General Error Class with Message
+  ENDTRY.
+  go_columns = go_table->get_columns( ).
+  TRY.
+      lo_column ?= go_columns->get_column( 'MSGV1' ).
+      lo_column->set_short_text('Insp.Lot').
+    CATCH cx_salv_not_found.                            "#EC NO_HANDLER
+  ENDTRY.
+  TRY.
+      lo_column ?= go_columns->get_column( 'MSGV2' ).
+      lo_column->set_short_text('Material').
+    CATCH cx_salv_not_found.                            "#EC NO_HANDLER
+  ENDTRY.
+  TRY.
+      lo_column ?= go_columns->get_column( 'MSGV3' ).
+      lo_column->set_short_text('Batch').
+    CATCH cx_salv_not_found.                            "#EC NO_HANDLER
+  ENDTRY.
+  TRY.
+      lo_column ?= go_columns->get_column( 'FLDNAME' ).
+      lo_column->set_short_text( 'Issues' ).
+    CATCH cx_salv_not_found.                            "#EC NO_HANDLER
+  ENDTRY.
+  go_columns->set_column_position( columnname = 'MSGV1' position = 1 ).
+  go_columns->set_column_position( columnname = 'MSGV2' position = 2 ).
+  go_columns->set_column_position( columnname = 'MSGV3' position = 3 ).
+  go_columns->set_column_position( columnname = 'FLDNAME' position = 4 ).
+  go_columns->set_optimize( 'X' ).
+  go_table->display( ).
+
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form Populate_error_log
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*& -->  p1        text
+*& <--  p2        text
+*&---------------------------------------------------------------------*
+FORM Populate_error_log .
+  LOOP AT gt_error_msg ASSIGNING FIELD-SYMBOL(<fs_error_msg>).
+    APPEND INITIAL LINE TO gt_error_log ASSIGNING FIELD-SYMBOL(<fs_error_log>).
+    <fs_error_log>-fldname = <fs_error_msg>-fldname.
+    <fs_error_log>-msgv1 = <fs_error_msg>-msgv1.
+    <fs_error_log>-msgv2 = <fs_error_msg>-msgv2.
+    <fs_error_log>-msgv3 = <fs_error_msg>-msgv3.
+  ENDLOOP.
+
+ENDFORM.
